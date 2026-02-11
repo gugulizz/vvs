@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="lt">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    
+    <link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2563eb">
+
+    <title>Vežėjų Valdymo Sistema PRO</title>
+    <!-- Dependencies -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .cmr-expired { color: #ef4444 !important; font-weight: 700; }
+        .wa-link:hover { color: #25d366; text-decoration: underline; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
+        
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin-custom { animation: spin 1s linear infinite; }
+    </style>
+</head>
+<body class="bg-slate-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const Icon = ({ name, size = 18, className = "" }) => {
+            const fallbacks = {
+                Truck: "🚚", MapPin: "📍", Plus: "➕", Trash2: "🗑️", 
+                Download: "📥", Search: "🔍", ChevronLeft: "❮", 
+                Globe: "🌐", Phone: "📞", FileText: "📄", Database: "🗄️",
+                User: "👤", Mail: "✉️", CheckCircle: "✅", AlertCircle: "⚠️",
+                XCircle: "❌", ExternalLink: "🔗", MessageCircle: "💬",
+                Upload: "📤", Save: "💾", Settings: "⚙️", Sparkles: "✨",
+                Loader: "⌛", Key: "🔑", Hash: "🔢", AtSign: "@"
+            };
+            return <span className={className} style={{fontSize: size, display: 'inline-flex', alignItems: 'center'}}>{fallbacks[name] || "•"}</span>;
+        };
+
+        const REGIONS = [
+            { id: 'skandinavija', name: 'Skandinavija', icon: '❄️' },
+            { id: 'vakaru_europa', name: 'Vakarų Europa', icon: '🇪🇺' },
+            { id: 'balkanai', name: 'Balkanai', icon: '🏔️' },
+            { id: 'beneliuksas', name: 'Beneliuksas', icon: '🇳🇱' }
+        ];
+
+        const VEHICLE_TYPES = ['Devinvietis', 'Penkiavietis', 'Žemagrindis', 'Negabaritas', 'Sprinteris'];
+        const STATUS_OPTIONS = ['Patikrintas', 'Nepatikrintas'];
+        const WHATSAPP_OPTIONS = ['Taip', 'Ne'];
+
+        const INITIAL_DATA = {
+            skandinavija: [], vakaru_europa: [], balkanai: [], beneliuksas: []
+        };
+
+        const getWhatsAppLink = (phone) => {
+            if (!phone) return null;
+            const cleaned = phone.replace(/\D/g, '');
+            return `https://wa.me/${cleaned}`;
+        };
+
+        const App = () => {
+            const [activeRegion, setActiveRegion] = useState('skandinavija');
+            const [view, setView] = useState({ type: 'list', companyId: null });
+            const [data, setData] = useState(() => {
+                const saved = localStorage.getItem('vezeju_db_v4_data');
+                return saved ? JSON.parse(saved) : INITIAL_DATA;
+            });
+            const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || "");
+            const [searchTerm, setSearchTerm] = useState('');
+            const fileInputRef = useRef(null);
+
+            useEffect(() => {
+                localStorage.setItem('vezeju_db_v4_data', JSON.stringify(data));
+            }, [data]);
+
+            useEffect(() => {
+                localStorage.setItem('gemini_api_key', apiKey);
+            }, [apiKey]);
+
+            const isCmrExpired = (dateString) => {
+                if (!dateString) return false;
+                const today = new Date();
+                const expiryDate = new Date(dateString);
+                return expiryDate < today;
+            };
+
+            const exportToJSON = () => {
+                const dataStr = JSON.stringify(data, null, 2);
+                const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
+                const exportFileDefaultName = 'vezeju_duomenu_baze_backup.json';
+                const linkElement = document.createElement('a');
+                linkElement.setAttribute('href', dataUri);
+                linkElement.setAttribute('download', exportFileDefaultName);
+                linkElement.click();
+            };
+
+            const importFromJSON = (event) => {
+                const fileReader = new FileReader();
+                fileReader.readAsText(event.target.files[0], "UTF-8");
+                fileReader.onload = (e) => {
+                    try {
+                        const importedData = JSON.parse(e.target.result);
+                        if (importedData.skandinavija) {
+                            if (confirm("DĖMESIO: Importuojami duomenys pakeis dabartinę duomenų bazę. Ar tęsti?")) {
+                                setData(importedData);
+                                alert("Duomenys sėkmingai importuoti!");
+                            }
+                        } else {
+                            alert("Klaida: Netinkamas failo formatas.");
+                        }
+                    } catch (err) {
+                        alert("Klaida nuskaitant failą.");
+                    }
+                };
+                event.target.value = '';
+            };
+
+            const exportToCSV = () => {
+                let csvContent = "data:text/csv;charset=utf-8,Regionas,Imone,Imones Kodas,PVM Kodas,Adresas,Oficialus El. Pastas,CMR Galiojimas,Statusas,Transportas,Pastabos\n";
+                Object.keys(data).forEach(regionKey => {
+                    const regionName = REGIONS.find(r => r.id === regionKey).name;
+                    data[regionKey].forEach(row => {
+                        const fleetStr = row.fleet?.map(f => `${f.count}x ${f.type}`).join('; ') || '';
+                        csvContent += `${regionName},"${row.name}","${row.companyCode || ''}","${row.vatCode || ''}","${row.address || ''}","${row.officialEmail || ''}","${row.cmrExpiry}","${row.status}","${fleetStr}","${row.notes}"\n`;
+                    });
+                });
+                const encodedUri = encodeURI(csvContent);
+                const link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", "vezeju_eksportas.csv");
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            };
+
+            const handleUpdateCompany = (updatedCompany) => {
+                setData(prev => {
+                    const newData = { ...prev };
+                    const index = newData[activeRegion].findIndex(c => c.id === updatedCompany.id);
+                    if (index !== -1) {
+                        newData[activeRegion][index] = updatedCompany;
+                    } else {
+                        newData[activeRegion].push(updatedCompany);
+                    }
+                    return newData;
+                });
+                setView({ type: 'list', companyId: null });
+            };
+
+            const addNewCompany = () => {
+                const newId = Date.now();
+                const newComp = {
+                    id: newId,
+                    name: '',
+                    companyCode: '',
+                    vatCode: '',
+                    address: '',
+                    officialEmail: '',
+                    cmrExpiry: '',
+                    status: 'Nepatikrintas',
+                    fleet: [],
+                    notes: '',
+                    contacts: [{ id: Date.now() + 1, name: '', email: '', phone: '', whatsapp: 'Ne' }]
+                };
+                setView({ type: 'edit', companyId: newId, tempCompany: newComp });
+            };
+
+            const deleteEntry = (id) => {
+                if(confirm("Ar tikrai norite ištrinti šią įmonę?")) {
+                    setData(prev => ({ ...prev, [activeRegion]: prev[activeRegion].filter(item => item.id !== id) }));
+                }
+            };
+
+            const filteredData = data[activeRegion].filter(item => 
+                (item.name && item.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                (item.vatCode && item.vatCode.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                (item.companyCode && item.companyCode.toLowerCase().includes(searchTerm.toLowerCase())) ||
+                (item.notes && item.notes.toLowerCase().includes(searchTerm.toLowerCase()))
+            );
+
+            if (view.type === 'edit') {
+                return <CompanyForm 
+                    company={view.tempCompany || data[activeRegion].find(c => c.id === view.companyId)} 
+                    onSave={handleUpdateCompany} 
+                    onCancel={() => setView({ type: 'list', companyId: null })}
+                    apiKey={apiKey}
+                />;
+            }
+
+            return (
+                <div className="flex h-screen overflow-hidden text-slate-900">
+                    <aside className="w-64 bg-slate-900 text-white flex-shrink-0 flex flex-col">
+                        <div className="p-6 flex items-center gap-3 border-b border-slate-800">
+                            <div className="p-2 bg-blue-600 rounded-lg"><Icon name="Truck" size={24} /></div>
+                            <h1 className="font-bold text-lg tracking-tight">Vežėjų DB</h1>
+                        </div>
+                        
+                        <nav className="flex-1 p-4 space-y-2 overflow-y-auto">
+                            <p className="px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-widest">Regionai</p>
+                            {REGIONS.map(region => (
+                                <button key={region.id} onClick={() => { setActiveRegion(region.id); setView({type:'list'}); }}
+                                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${activeRegion === region.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>
+                                    <span className="text-xl">{region.icon}</span>
+                                    <span className="font-medium text-sm">{region.name}</span>
+                                </button>
+                            ))}
+                        </nav>
+
+                        <div className="p-4 border-t border-slate-800 space-y-3 text-sm">
+                            <div>
+                                <p className="px-4 py-1 text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                                    <Icon name="Key" size={10} /> AI Raktas (Gemini)
+                                </p>
+                                <input 
+                                    type="password" 
+                                    placeholder="Įklijuokite API raktą..." 
+                                    className="w-full mt-1 bg-slate-800 border-none rounded-lg p-2 text-xs text-slate-200 outline-none focus:ring-1 focus:ring-blue-500"
+                                    value={apiKey}
+                                    onChange={(e) => setApiKey(e.target.value)}
+                                />
+                            </div>
+                            <div className="space-y-1 pt-2">
+                                <button onClick={() => fileInputRef.current.click()} className="w-full flex items-center gap-3 px-4 py-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all text-xs">
+                                    <Icon name="Upload" size={14} /> Importuoti (JSON)
+                                </button>
+                                <button onClick={exportToJSON} className="w-full flex items-center gap-3 px-4 py-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-all text-xs">
+                                    <Icon name="Save" size={14} /> Atsarginė kopija
+                                </button>
+                                <button onClick={exportToCSV} className="w-full flex items-center gap-3 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold mt-2 text-xs">
+                                    <Icon name="Download" size={14} /> Eksportuoti į Excel
+                                </button>
+                            </div>
+                            <input type="file" ref={fileInputRef} onChange={importFromJSON} accept=".json" className="hidden" />
+                        </div>
+                    </aside>
+
+                    <main className="flex-1 flex flex-col overflow-hidden">
+                        <header className="h-16 bg-white border-b border-slate-200 px-8 flex items-center justify-between">
+                            <div className="flex items-center gap-4">
+                                <h2 className="text-xl font-bold">{REGIONS.find(r => r.id === activeRegion).name}</h2>
+                            </div>
+                            <div className="flex items-center gap-4 w-1/2">
+                                <div className="relative w-full">
+                                    <Icon name="Search" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                    <input type="text" placeholder="Ieškoti (Įmonė, Kodas, PVM, Šalys)..." className="w-full pl-10 pr-4 py-2 bg-slate-100 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 transition-all" 
+                                        value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+                                </div>
+                                <button onClick={addNewCompany} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg font-semibold text-sm hover:bg-blue-700 flex-shrink-0 shadow-sm transition-all active:scale-95">
+                                    <Icon name="Plus" /> Pridėti įmonę
+                                </button>
+                            </div>
+                        </header>
+
+                        <div className="flex-1 overflow-y-auto p-8">
+                            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden text-sm">
+                                <table className="w-full text-left border-collapse">
+                                    <thead>
+                                        <tr className="bg-slate-50 border-b border-slate-200 text-xs font-bold text-slate-500 uppercase">
+                                            <th className="px-6 py-4">Įmonė</th>
+                                            <th className="px-6 py-4">Kodai</th>
+                                            <th className="px-6 py-4 text-center">Statusas</th>
+                                            <th className="px-6 py-4">Transportas</th>
+                                            <th className="px-6 py-4">Kontaktas</th>
+                                            <th className="px-6 py-4 text-center">WhatsApp</th>
+                                            <th className="px-6 py-4 text-right">Veiksmai</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {filteredData.length > 0 ? filteredData.map(item => (
+                                            <tr key={item.id} className="hover:bg-slate-50 cursor-pointer transition-colors" onClick={() => setView({ type: 'edit', companyId: item.id })}>
+                                                <td className="px-6 py-4">
+                                                    <div className={`font-semibold ${isCmrExpired(item.cmrExpiry) ? 'cmr-expired text-red-600' : 'text-slate-800'}`}>
+                                                        {item.name || '— Pavadinimas nenurodytas —'}
+                                                    </div>
+                                                    {item.address && <div className="text-[10px] text-slate-400 truncate max-w-[150px]"><Icon name="MapPin" size={8} className="mr-1" />{item.address}</div>}
+                                                </td>
+                                                <td className="px-6 py-4 text-slate-500 text-[10px] leading-tight">
+                                                    <div>Kodas: {item.companyCode || '—'}</div>
+                                                    <div>PVM: {item.vatCode || '—'}</div>
+                                                </td>
+                                                <td className="px-6 py-4 text-center">
+                                                    <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-tight ${item.status === 'Patikrintas' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                                                        {item.status}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    <div className="flex flex-wrap gap-1 max-w-[180px]">
+                                                        {item.fleet && item.fleet.length > 0 ? item.fleet.map((f, i) => (
+                                                            <span key={i} className="px-1.5 py-0.5 bg-blue-50 text-blue-600 border border-blue-100 rounded text-[10px] font-medium">
+                                                                {f.count}x {f.type}
+                                                            </span>
+                                                        )) : <span className="text-slate-300 italic text-[10px]">Nėra duomenų</span>}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-4 text-xs">
+                                                    {item.contacts?.[0] ? (
+                                                        <div>
+                                                            <div className="font-medium text-slate-700">{item.contacts[0].name}</div>
+                                                            <a href={getWhatsAppLink(item.contacts[0].phone)} target="_blank" onClick={(e) => e.stopPropagation()} 
+                                                               className="text-slate-400 wa-link flex items-center gap-1 mt-0.5">
+                                                                <Icon name="Phone" size={10} /> {item.contacts[0].phone}
+                                                            </a>
+                                                        </div>
+                                                    ) : '—'}
+                                                </td>
+                                                <td className="px-6 py-4 text-center">
+                                                    {item.contacts?.[0]?.whatsapp === 'Taip' ? <Icon name="CheckCircle" className="text-emerald-500" /> : <Icon name="XCircle" className="text-slate-200" />}
+                                                </td>
+                                                <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                                                    <button onClick={() => deleteEntry(item.id)} className="text-slate-300 hover:text-red-500 p-2 transition-colors"><Icon name="Trash2" /></button>
+                                                </td>
+                                            </tr>
+                                        )) : (
+                                            <tr>
+                                                <td colSpan="7" className="px-6 py-12 text-center text-slate-400 italic">Nieko nerasta</td>
+                                            </tr>
+                                        )}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        const CompanyForm = ({ company, onSave, onCancel, apiKey }) => {
+            const [formData, setFormData] = useState(company);
+            const [fleetInput, setFleetInput] = useState({ count: '', type: VEHICLE_TYPES[0] });
+            const [isFetching, setIsFetching] = useState(false);
+            const [aiQuery, setAiQuery] = useState("");
+
+            const fetchCompanyFromAI = async () => {
+                if (!apiKey) {
+                    alert("KLAIDA: Pirmiausia kairiajame meniu įveskite Gemini API raktą.");
+                    return;
+                }
+                if (!aiQuery.trim()) return;
+                
+                setIsFetching(true);
+                try {
+                    const userPrompt = `Rask informaciją apie šią įmonę Lietuvoje (pagal pavadinimą arba Rekvizitai.lt nuorodą): "${aiQuery}". 
+                    Ištrauk tikslų įmonės pavadinimą, įmonės kodą, PVM kodą, adresą ir oficialų el. paštą. 
+                    Atsakyk TIK JSON formatu be jokių papildomų žodžių: {"name": "Tikslus Pavadinimas", "companyCode": "Kodas", "vatCode": "PVM kodas", "address": "Adresas", "officialEmail": "El. paštas"}. 
+                    Jei duomenų nėra, rašyk "Nėra". Jei įmonės nerandi, grąžink tuščią JSON objektą su raktais.`;
+
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            contents: [{ parts: [{ text: userPrompt }] }],
+                            tools: [{ "google_search": {} }]
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errorData = await response.json();
+                        throw new Error(errorData.error?.message || "API klaida");
+                    }
+
+                    const result = await response.json();
+                    const textResponse = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                    
+                    const jsonMatch = textResponse.match(/\{.*\}/s);
+                    if (jsonMatch) {
+                        const extracted = JSON.parse(jsonMatch[0]);
+                        if (extracted.name) {
+                            setFormData({
+                                ...formData,
+                                name: extracted.name || formData.name,
+                                companyCode: extracted.companyCode === "Nėra" ? "" : (extracted.companyCode || formData.companyCode),
+                                vatCode: extracted.vatCode === "Nėra" ? "" : (extracted.vatCode || formData.vatCode),
+                                address: extracted.address === "Nėra" ? "" : (extracted.address || formData.address),
+                                officialEmail: extracted.officialEmail === "Nėra" ? "" : (extracted.officialEmail || formData.officialEmail)
+                            });
+                            alert("Visi duomenys sėkmingai rasti ir užpildyti!");
+                        } else {
+                            alert("AI nepavyko rasti šios įmonės duomenų.");
+                        }
+                    } else {
+                        alert("Nepavyko apdoroti AI atsakymo. Bandykite dar kartą.");
+                    }
+                } catch (error) {
+                    console.error("AI Error:", error);
+                    alert("Klaida užklausos metu: " + error.message);
+                } finally {
+                    setIsFetching(false);
+                }
+            };
+
+            const addFleetItem = () => {
+                if (!fleetInput.count || parseInt(fleetInput.count) <= 0) return;
+                setFormData({
+                    ...formData,
+                    fleet: [...(formData.fleet || []), { ...fleetInput, count: parseInt(fleetInput.count) }]
+                });
+                setFleetInput({ ...fleetInput, count: '' });
+            };
+
+            const removeFleetItem = (index) => {
+                setFormData({ ...formData, fleet: formData.fleet.filter((_, i) => i !== index) });
+            };
+
+            const addContact = () => {
+                setFormData({ ...formData, contacts: [...(formData.contacts || []), { id: Date.now(), name: '', email: '', phone: '', whatsapp: 'Ne' }] });
+            };
+
+            const updateContact = (id, field, value) => {
+                const newContacts = formData.contacts.map(c => c.id === id ? { ...c, [field]: value } : c);
+                setFormData({ ...formData, contacts: newContacts });
+            };
+
+            const removeContact = (id) => {
+                setFormData({ ...formData, contacts: formData.contacts.filter(c => c.id !== id) });
+            };
+
+            const isExpired = (date) => date && new Date(date) < new Date();
+
+            return (
+                <div className="flex-1 flex flex-col bg-slate-50 h-screen overflow-hidden animate-in fade-in duration-300">
+                    <header className="h-16 bg-white border-b px-8 flex items-center justify-between flex-shrink-0">
+                        <button onClick={onCancel} className="flex items-center gap-2 text-slate-500 font-medium hover:text-slate-800 transition-colors">
+                            <Icon name="ChevronLeft" /> Atgal į sąrašą
+                        </button>
+                        <button onClick={() => onSave(formData)} className="bg-blue-600 text-white px-8 py-2 rounded-lg font-bold shadow-md hover:bg-blue-700 transition-all active:scale-95 flex items-center gap-2">
+                            <Icon name="Save" size={16} /> Išsaugoti
+                        </button>
+                    </header>
+                    
+                    <div className="flex-1 overflow-y-auto p-8 max-w-5xl mx-auto w-full">
+                        {/* AI Įrankis */}
+                        <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-6 rounded-2xl shadow-lg mb-8 text-white relative overflow-hidden">
+                            <div className="relative z-10">
+                                <h3 className="text-lg font-bold flex items-center gap-2 mb-2">
+                                    <Icon name="Sparkles" className="text-yellow-300" /> Automatinis užpildymas
+                                </h3>
+                                <p className="text-blue-100 text-xs mb-4">Įveskite nuorodą arba pavadinimą – AI suras kodus, adresą ir oficialų el. paštą.</p>
+                                <div className="flex gap-2">
+                                    <input 
+                                        type="text" 
+                                        className="flex-1 p-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-white/50 outline-none focus:bg-white/20 transition-all text-sm"
+                                        placeholder="Nuoroda arba Įmonės pavadinimas..."
+                                        value={aiQuery}
+                                        onChange={(e) => setAiQuery(e.target.value)}
+                                    />
+                                    <button 
+                                        onClick={fetchCompanyFromAI}
+                                        disabled={isFetching}
+                                        className="bg-white text-blue-700 px-6 py-3 rounded-xl font-bold text-sm hover:bg-blue-50 transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg"
+                                    >
+                                        {isFetching ? <Icon name="Loader" className="animate-spin-custom" /> : <Icon name="Search" />}
+                                        {isFetching ? "Ieškoma..." : "Užpildyti"}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
+                            {/* Bendrinė informacija */}
+                            <div className="bg-white p-6 rounded-2xl border shadow-sm space-y-4">
+                                <h3 className="font-bold text-slate-800 border-b pb-2 mb-4 flex items-center gap-2">
+                                    <Icon name="Database" className="text-blue-500" /> Įmonės informacija
+                                </h3>
+                                <div className="space-y-4">
+                                    <label className="block">
+                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Įmonės pavadinimas</span>
+                                        <input className={`w-full mt-1 p-3 border rounded-xl outline-none transition-all ${isExpired(formData.cmrExpiry) ? 'text-red-600 font-bold border-red-200 bg-red-50 focus:border-red-400' : 'focus:border-blue-500'}`}
+                                            value={formData.name} onChange={e => setFormData({...formData, name: e.target.value})} />
+                                    </label>
+                                    
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <label className="block">
+                                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Įmonės kodas</span>
+                                            <input className="w-full mt-1 p-3 border rounded-xl outline-none focus:border-blue-500 bg-slate-50/50"
+                                                value={formData.companyCode} onChange={e => setFormData({...formData, companyCode: e.target.value})} />
+                                        </label>
+                                        <label className="block">
+                                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">PVM Kodas</span>
+                                            <input className="w-full mt-1 p-3 border rounded-xl outline-none focus:border-blue-500 bg-slate-50/50"
+                                                value={formData.vatCode} onChange={e => setFormData({...formData, vatCode: e.target.value})} />
+                                        </label>
+                                    </div>
+
+                                    <label className="block">
+                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Adresas</span>
+                                        <input className="w-full mt-1 p-3 border rounded-xl outline-none focus:border-blue-500"
+                                            value={formData.address} onChange={e => setFormData({...formData, address: e.target.value})} placeholder="Pvz.: Gatvė g. 1, Vilnius" />
+                                    </label>
+
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <label className="block">
+                                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Oficialus El. Paštas</span>
+                                            <input className="w-full mt-1 p-3 border rounded-xl outline-none focus:border-blue-500"
+                                                value={formData.officialEmail} onChange={e => setFormData({...formData, officialEmail: e.target.value})} placeholder="info@imone.lt" />
+                                        </label>
+                                        <label className="block">
+                                            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Statusas</span>
+                                            <select className="w-full mt-1 p-3 border rounded-xl outline-none focus:border-blue-500 bg-white"
+                                                value={formData.status} onChange={e => setFormData({...formData, status: e.target.value})}>
+                                                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                                            </select>
+                                        </label>
+                                    </div>
+
+                                    <label className="block">
+                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">CMR Draudimo Galiojimas</span>
+                                        <input type="date" className={`w-full mt-1 p-3 border rounded-xl outline-none transition-all ${isExpired(formData.cmrExpiry) ? 'border-red-500 bg-red-50 text-red-700' : 'focus:border-blue-500'}`}
+                                            value={formData.cmrExpiry} onChange={e => setFormData({...formData, cmrExpiry: e.target.value})} />
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* Transportas */}
+                            <div className="bg-white p-6 rounded-2xl border shadow-sm flex flex-col">
+                                <h3 className="font-bold text-slate-800 border-b pb-2 mb-4 flex items-center gap-2">
+                                    <Icon name="Truck" className="text-blue-500" /> Transporto parkas
+                                </h3>
+                                <div className="space-y-4 flex-1">
+                                    <div className="flex gap-2 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                        <div className="w-24">
+                                            <span className="text-[10px] font-bold text-slate-500 uppercase ml-1">Kiekis</span>
+                                            <input type="number" className="w-full p-2.5 border rounded-lg text-sm outline-none focus:border-blue-500"
+                                                value={fleetInput.count} onChange={e => setFleetInput({...fleetInput, count: e.target.value})} placeholder="0" />
+                                        </div>
+                                        <div className="flex-1">
+                                            <span className="text-[10px] font-bold text-slate-500 uppercase ml-1">Rūšis</span>
+                                            <select className="w-full p-2.5 border rounded-lg text-sm outline-none bg-white focus:border-blue-500"
+                                                value={fleetInput.type} onChange={e => setFleetInput({...fleetInput, type: e.target.value})}>
+                                                {VEHICLE_TYPES.map(v => <option key={v} value={v}>{v}</option>)}
+                                            </select>
+                                        </div>
+                                        <button onClick={addFleetItem} className="p-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-sm active:scale-90 transition-all self-end">
+                                            <Icon name="Plus" />
+                                        </button>
+                                    </div>
+
+                                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                                        {formData.fleet && formData.fleet.length > 0 ? (
+                                            formData.fleet.map((item, idx) => (
+                                                <div key={idx} className="flex items-center justify-between p-3 bg-white border border-slate-100 rounded-xl group shadow-sm hover:border-blue-200 transition-colors">
+                                                    <div className="flex items-center gap-4">
+                                                        <span className="flex items-center justify-center min-w-[32px] h-7 bg-blue-100 text-blue-700 text-xs font-bold rounded-lg px-2">{item.count}</span>
+                                                        <span className="text-sm font-semibold text-slate-700">{item.type}</span>
+                                                    </div>
+                                                    <button onClick={() => removeFleetItem(idx)} className="text-slate-300 hover:text-red-500 transition-colors p-1 opacity-100"><Icon name="Trash2" size={14} /></button>
+                                                </div>
+                                            ))
+                                        ) : (
+                                            <div className="text-center py-8 border-2 border-dashed border-slate-100 rounded-2xl text-slate-400 text-xs italic">Transportas nepridėtas</div>
+                                        )}
+                                    </div>
+                                    <label className="block mt-4">
+                                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Pastabos (Šalys, spec. info)</span>
+                                        <textarea className="w-full mt-1.5 p-3 border rounded-xl outline-none focus:border-blue-500 h-24 text-sm resize-none bg-slate-50/30"
+                                            value={formData.notes} onChange={e => setFormData({...formData, notes: e.target.value})} placeholder="pvz.: DE, PL, NO, FR. Tik skubūs ratai." />
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Kontaktai */}
+                        <div className="bg-white rounded-2xl border shadow-sm overflow-hidden mb-12">
+                            <div className="p-6 bg-slate-50 border-b flex justify-between items-center">
+                                <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest flex items-center gap-2"><Icon name="User" className="text-blue-500" /> Kontaktai (Vadybininkai)</h3>
+                                <button onClick={addContact} className="flex items-center gap-2 text-blue-600 font-bold text-sm hover:text-blue-800 transition-colors bg-white px-4 py-2 rounded-lg border border-blue-100 shadow-sm">
+                                    <Icon name="Plus" /> Pridėti asmenį
+                                </button>
+                            </div>
+                            <div className="p-0 overflow-x-auto">
+                                <table className="w-full text-left text-sm">
+                                    <thead>
+                                        <tr className="bg-slate-100/50 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                                            <th className="px-6 py-4">Vardas</th>
+                                            <th className="px-6 py-4">El. paštas</th>
+                                            <th className="px-6 py-4">Telefonas</th>
+                                            <th className="px-6 py-4 text-center">WhatsApp</th>
+                                            <th className="px-6 py-4 text-right"></th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {formData.contacts?.map(contact => (
+                                            <tr key={contact.id} className="hover:bg-slate-50 transition-colors group">
+                                                <td className="px-6 py-3"><input className="w-full bg-transparent outline-none focus:text-blue-600 py-1" value={contact.name} onChange={e => updateContact(contact.id, 'name', e.target.value)} placeholder="Vardas" /></td>
+                                                <td className="px-6 py-3"><input className="w-full bg-transparent outline-none py-1" value={contact.email} onChange={e => updateContact(contact.id, 'email', e.target.value)} placeholder="email@imone.lt" /></td>
+                                                <td className="px-6 py-3">
+                                                    <div className="flex items-center gap-3">
+                                                        <input className="w-full bg-transparent outline-none py-1" value={contact.phone} onChange={e => updateContact(contact.id, 'phone', e.target.value)} placeholder="+370..." />
+                                                        {contact.phone && <a href={getWhatsAppLink(contact.phone)} target="_blank" className="text-emerald-500 hover:text-emerald-600 p-1.5 bg-emerald-50 rounded-lg"><Icon name="MessageCircle" size={16} /></a>}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-3">
+                                                    <select className="w-full bg-transparent outline-none font-medium text-center" value={contact.whatsapp} onChange={e => updateContact(contact.id, 'whatsapp', e.target.value)}>
+                                                        {WHATSAPP_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                                                    </select>
+                                                </td>
+                                                <td className="px-6 py-3 text-right"><button onClick={() => removeContact(contact.id)} className="text-slate-300 hover:text-red-500 p-2"><Icon name="Trash2" size={16}/></button></td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
